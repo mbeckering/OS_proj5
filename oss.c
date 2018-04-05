@@ -35,6 +35,8 @@
 void printAvail();
 void initIPC();
 void clearIPC();
+int safe();
+int numUsersRunning();
 
 // GLOBALS
 sem_t *sem; //sim clock mutual exclusion
@@ -56,61 +58,8 @@ struct state {
 struct state liveState;
 //struct state testState;
 
-int safe () {
-    int i=0, j=0, k=0, possible=0, found=0;
-    int need[P][R]; //max additional needs of each resource by each process
-    int pcount = numUsersRunning();
-    int processes[pcount];
-    //put running pids into process array
-    for (i=0; i<P; i++) {
-        if (bitVector[i] == 1) {
-            processes[j] = i;
-            j++;
-        }
-    }
-    //copy currently available resources into local avail array
-    int currentavail[R];
-    for (i=0; i<R; i++) {
-        currentavail[i] = liveState.avail[i];
-    }
-    //find max additional needs of each resource by each process
-    for (i=0; i<P; i++) {
-        for (j=0; j<R; j++) {
-            need[i][j] = liveState.max_claim[i][j] - liveState.alloc[i][j];
-        }
-    }
-    possible = 1;
-    
-    while (possible) {
-        //for each process in the array of running processes
-        for (i=0; i<pcount; i++) {
-            //and for each resource type for each running process
-            for (j=0; j<R; j++) {
-                //if this process could claim every resource it could
-                //possibly need from currently available resources
-                
-                }
-            }
-        }
-    }
-    
-    
-}
 
-int numUsersRunning() {
-    int i = 0;
-    int pcount = 0;
-    for (i=0; i<P; i++) {
-        if (bitVector[i] == 1) {
-            pcount++;
-        }
-    }
-    return pcount;
-}
-
-/*
- * 
- */
+/********************************* MAIN ***************************************/
 int main(int argc, char** argv) {
     char str_arg1[10]; //strings for execl call args
     char str_arg2[10];
@@ -122,7 +71,7 @@ int main(int argc, char** argv) {
     
     // Determine initial available resources
     for (j=0; j<R; j++) {
-        avail[j] = rand_r(&seed) % 10 + 1;
+        liveState.avail[j] = rand_r(&seed) % 10 + 1;
     }
     
     initIPC();
@@ -141,12 +90,89 @@ int main(int argc, char** argv) {
         exit(0);
     }
     
-
+    int poop = safe();
+    printf("OSS: poop = %i\n", poop);
     pid_t waitpid;
     while( (waitpid = wait(&status)) > 0);
     clearIPC();
     printf("OSS: normal exit\n");
     return (EXIT_SUCCESS);
+}
+
+/******************************* FUNCTIONS ************************************/
+
+int safe () {
+    int i=0, j=0, k=0, possible=0, found=0, count=0;
+    int need[P][R]; //max additional needs of each resource by each process
+    int pcount = numUsersRunning();
+    //copy currently available resources into local avail array
+    int currentavail[R];
+    for (i=0; i<R; i++) {
+        currentavail[i] = liveState.avail[i];
+    }
+    int testVector[P];
+    for (i=0; i<P; i++) {
+        testVector[i] = bitVector[i];
+    }
+    //find max additional needs of each resource by each process
+    for (i=0; i<P; i++) {
+        for (j=0; j<R; j++) {
+            need[i][j] = liveState.max_claim[i][j] - liveState.alloc[i][j];
+        }
+    }
+    possible = 1;
+    
+    while (count < pcount) {
+        found = 0;
+        //for each process
+        for (i=0; i<P; i++) {
+            //that is RUNNING in our system copy
+            if (testVector[i] == 1) {
+                //and for each resource type for this running process
+                for (j=0; j<R; j++) {
+                    //if this process could claim every resource it could
+                    //possibly need from currently available resources
+                    if (need[i][j] <= currentavail[j]) {
+                        //if this loop made it to R-1, candidate found
+                        if (j == R-1) {
+                            found = 1;
+                            count++; //move toward exiting while loop
+                            //simulate termination of this process
+                            testVector[i] = 0;
+                            //increment sim available resources we would gain
+                            //from termination of this process
+                            for (k=0; k<R; k++){
+                                currentavail[k] = currentavail[k] 
+                                        + liveState.alloc[i][k];
+                            }
+                            i=1000; //this will jump back to beginning of while
+                            j=1000; //loop and start again without this process
+                        }
+                    }
+                    //go on to next process if there aren't enough available
+                    //resources to satisfy all of this user's possible needs
+                    else break;
+                }//end resource for loop
+            }//end running process if statement
+        } //end process for loop
+        if (found == 0) {
+            printf("OSS: System not in safe state\n");
+            return 0;
+        }
+    }
+    printf("OSS: System is in safe state\n");
+    return 1;
+}
+
+int numUsersRunning() {
+    int i = 0;
+    int pcount = 0;
+    for (i=0; i<P; i++) {
+        if (bitVector[i] == 1) {
+            pcount++;
+        }
+    }
+    return pcount;
 }
 
 void initIPC() {
@@ -172,7 +198,7 @@ void initIPC() {
 void printAvail() {
     int i;
     for(i=0; i<R; i++){
-        printf("P%i: %i ", i, avail[i]);
+        printf("P%i: %i ", i, liveState.avail[i]);
     }
     printf("\n");
 }
