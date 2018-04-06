@@ -48,7 +48,7 @@ int main(int argc, char** argv) {
     
     initIPC();
     
-
+    printf("user%i: terminating: normal\n", my_pnum);
     return (EXIT_SUCCESS);
 }
 
