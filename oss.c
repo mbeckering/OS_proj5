@@ -33,6 +33,7 @@
 #define SNAME "clocksem"
 #define SHMKEY_sim_s 4020012
 #define SHMKEY_sim_ns 4020013
+#define SHMKEY_state 4020014
 #define BUFF_SZ sizeof (unsigned int)
 #define BILLION 1000000000
 
@@ -42,6 +43,7 @@ static int setinterrupt();
 static void interrupt(int signo, siginfo_t *info, void *context);
 static void siginthandler(int sig_num);
 
+void printAlloc();
 void printAvail();
 void initIPC();
 void clearIPC();
@@ -52,13 +54,14 @@ int numUsersRunning(int[]);
 sem_t *sem; //sim clock mutual exclusion
 int R = 20; // Number of resource types
 int P = 18; // Max number of user processes
-int rclaim_bound = 3; // upper bound for maximum resource claim by users
+int rclaim_bound = 1; // upper bound for maximum resource claim by users
 int bitVector[18]; // keeps track of what simulated pids are running
 int shmid_sim_secs, shmid_sim_ns; //shared memory ID holders for sim clock
 int shmid_state; //shared memory ID holder for the liveState struct*****************************
 static unsigned int *SC_secs; //pointer to shm sim clock (seconds)
 static unsigned int *SC_ns; //pointer to shm sim clock (nanoseconds)
 
+//struct for shared memory, holds information about the state of the system
 struct state {
     int resource[20]; //total system resources initially available
     int avail[20]; //number of available resources of each type (types 0-19)
@@ -66,7 +69,8 @@ struct state {
     int alloc[18][20]; //resources of each type currently allocated to each user
     //int need[18][20]; //max - allocation: possible remaining need of each user
 };
-struct state liveState;
+struct state *liveState;
+struct state liveStateStruct;
 //struct state testState;
 
 
@@ -84,6 +88,17 @@ int main(int argc, char** argv) {
     int seed = getpid();
     
     signal (SIGINT, siginthandler);
+    
+    shmid_state = shmget(SHMKEY_state, sizeof(struct state), IPC_CREAT | 0777);
+    if (shmid_state == -1) { //terminate if shmget failed
+            perror("OSS: error in shmget state");
+            exit(1);
+        }
+    liveState = (struct state *) shmat(shmid_state, NULL, 0);
+    if (liveState == (struct state*)(-1) ) {
+        perror("OSS: error in shmat liveState");
+        exit(1);
+    }
     
     if (setperiodic(runtime) == -1) {
         perror("Failed to setup periodic interrupt");
@@ -111,12 +126,13 @@ int main(int argc, char** argv) {
     
     // Determine initial available resources
     for (j=0; j<R; j++) {
-        liveState.avail[j] = rand_r(&seed) % 10 + 1;
+        (*liveState).resource[j] = rand_r(&seed) % 10 + 1;
+        (*liveState).avail[j] = (*liveState).resource[j];
     }
-    
+
     initIPC();
     
-    //printAvail();
+    printAlloc();
     if ( (childpid = fork()) < 0 ){ //terminate code
         perror("OSS: Error forking user");
         clearIPC();
@@ -129,13 +145,7 @@ int main(int argc, char** argv) {
         perror("OSS: execl() failure"); //report & exit if exec fails
         exit(0);
     }
-    bitVector[5] = 1;
-    bitVector[0] = 1;
-    bitVector[15] = 1;
-    bitVector[16] = 1;
-    bitVector[17] = 1;
-    int poop = safe();
-    printf("OSS: poop = %i\n", poop);
+
     pid_t waitpid;
     while( (waitpid = wait(&status)) > 0);
     clearIPC();
@@ -150,15 +160,12 @@ int safe () {
     int i=0, j=0, k=0, possible=0, found=0, count=0;
     int need[P][R]; //max additional needs of each resource by each process
     int pcount = numUsersRunning(bitVector);
-    printf("pcount (numUsersRunning) = %i\n", pcount);
-    //copy currently available resources into local avail array
+    //copy currently available resources into local array for simulation
     int currentavail[R];
-    printf("avail: ");
     for (i=0; i<R; i++) {
-        currentavail[i] = liveState.avail[i];
-        printf("R%i: %i, ", i, liveState.avail[i]);
+        currentavail[i] = (*liveState).avail[i];
     }
-    printf("\n");
+    //copy list of running user pids into local array for simulation
     int testVector[P];
     for (i=0; i<P; i++) {
         testVector[i] = bitVector[i];
@@ -166,27 +173,22 @@ int safe () {
     //find max additional needs of each resource by each process
     for (i=0; i<P; i++) {
         for (j=0; j<R; j++) {
-            need[i][j] = liveState.max_claim[i][j] - liveState.alloc[i][j];
+            need[i][j] = (*liveState).max_claim[i][j] - (*liveState).alloc[i][j];
         }
     }
     possible = 1;
     
     while (count < P) {
         found = 0;
-        currentavail[5] = 1;
-        need[15][5] = 1;
         //for each process
         for (i=0; i<P; i++) {
             //that is RUNNING in our system copy
             if (testVector[i] == 1) {
-                printf("Looking at user pid %i\n", i);
                 //and for each resource type for this running process
                 for (j=0; j<R; j++) {
                     //if this process could claim every resource it could
                     //possibly need from currently available resources
                     if (need[i][j] <= currentavail[j]) {
-                        printf("user pid %i max need %i of resource %i and currentavail: %i\n",
-                                i, need[i][j], j, currentavail[j]);
                         //if this loop made it to R-1, then this could be
                         //granted all resources it needs to run to completion
                         if (j == R-1) {
@@ -198,10 +200,8 @@ int safe () {
                             //from termination of this process
                             for (k=0; k<R; k++){
                                 currentavail[k] = currentavail[k] 
-                                        + liveState.alloc[i][k];
+                                        + (*liveState).alloc[i][k];
                             }
-                            //i=1000; //this will jump back to beginning of while
-                            //j=1000; //loop and start again without this process
                         }
                     }
                     //go on to next process if there aren't enough available
@@ -256,10 +256,27 @@ void initIPC() {
 
 void printAvail() {
     int i;
+    printf("System  R0 \tR1 \tR2 \tR3 \tR4 \tR5 \tR6 \tR7 \tR8 \tR9 \tR10"
+    "\tR11\tR12\tR13\tR14\tR15\tR16\tR17\tR18\tR19\navail:  ");
     for(i=0; i<R; i++){
-        printf("R%i: %i ", i, liveState.avail[i]);
+        printf("%i\t", (*liveState).avail[i]);
     }
     printf("\n");
+}
+
+void printAlloc() {
+    int r, c;
+    printf("Current system resource allocation:\n");
+    printf("\tR0 \tR1 \tR2 \tR3 \tR4 \tR5 \tR6 \tR7 \tR8 \tR9 \tR10"
+    "\tR11\tR12\tR13\tR14\tR15\tR16\tR17\tR18\tR19\n");
+    for (r=0; r<P; r++) {
+        printf("P%i\t", r);
+        for (c=0; c<R; c++) {
+            printf("%i\t", (*liveState).alloc[r][c]);
+        }
+        printf("\n");
+    }
+    printAvail();
 }
 
 void clearIPC() {
