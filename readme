@@ -1,2 +1,12 @@
-# OS_proj5
-OS Simulation: Deadlock Avoidance (Banker's Algorithm with 20 resource types and &lt;=18 concurrent processes)
+Version control:
+https://github.com/mbeckering/OS_proj5
+
+Usage: ./oss [-v]
+-v: verbose mode on (extra info in log)
+
+GLOBALS
+I went a bit nuts with globals again, and again, it was to enable me to pass
+more work to functions and cut down on the length of my main functions. And 
+it's been working well on these large programs that already make me feel out 
+of my depth. Keeping track of passing & returning so many values is an extra 
+layer I'll avoid to save time and get my grades.

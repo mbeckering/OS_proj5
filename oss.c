@@ -1,15 +1,9 @@
-/*
- * To change this license header, choose License Headers in Project Properties.
- * To change this template file, choose Tools | Templates
- * and open the template in the editor.
- */
-
 /* 
  * File:   oss.c
  * Author: Michael Beckering
  * Project 5
  * Spring 2018 CS-4760-E01
- * Created on April 14, 2018, 10:12 AM
+ * Created on April 4, 2018, 10:12 AM
  */
 
 #include <stdio.h>
@@ -34,30 +28,33 @@
 #define SHMKEY_sim_s 4020012
 #define SHMKEY_sim_ns 4020013
 #define SHMKEY_state 4020014
+#define SHMKEY_msgq 4020015
 #define BUFF_SZ sizeof (unsigned int)
 #define BILLION 1000000000
 
-// Function prototypes
-static int setperiodic(double);
-static int setinterrupt();
-static void interrupt(int signo, siginfo_t *info, void *context);
-static void siginthandler(int sig_num);
+/********************* FUNCTION PROTOTYPES ************************************/
+static int setperiodic(double); //periodic interrupt setup
+static int setinterrupt(); //periodic interrupt setup
+static void interrupt(int signo, siginfo_t *info, void *context); //handler
+static void siginthandler(int sig_num); //sigint handler
 
-void printAlloc();
-void printAvail();
-void initIPC();
-void clearIPC();
-int safe();
-int numUsersRunning(int[]);
+void incrementClock(unsigned int, unsigned int); //add time to sim clock
+void printAlloc(); //print memory resource allocation table
+void printAvail(); //print the system's available resources
+void initIPC(); //initialize IPC stuff. shared mem, semaphores, queues, etc
+void clearIPC(); //clear all that stuff
+int safe(); //determine if current system is in a safe state
+int numUsersRunning(int[]); //returns current number of user processes
 
-// GLOBALS
+/************************ GLOBAL VARIABLES ************************************/
 sem_t *sem; //sim clock mutual exclusion
 int R = 20; // Number of resource types
 int P = 18; // Max number of user processes
-int rclaim_bound = 1; // upper bound for maximum resource claim by users
+int rclaim_bound = 3; // upper bound for maximum resource claim by users
 int bitVector[18]; // keeps track of what simulated pids are running
 int shmid_sim_secs, shmid_sim_ns; //shared memory ID holders for sim clock
-int shmid_state; //shared memory ID holder for the liveState struct*****************************
+int shmid_state; //shared memory ID holder for the liveState struct
+int shmid_qid; //shared memory ID holder for message queue
 static unsigned int *SC_secs; //pointer to shm sim clock (seconds)
 static unsigned int *SC_ns; //pointer to shm sim clock (nanoseconds)
 
@@ -69,9 +66,8 @@ struct state {
     int alloc[18][20]; //resources of each type currently allocated to each user
     //int need[18][20]; //max - allocation: possible remaining need of each user
 };
-struct state *liveState;
-struct state liveStateStruct;
-//struct state testState;
+struct state *liveState; //struct for our system state
+struct state liveStateStruct; //pointer to that struct for shmat
 
 
 /********************************* MAIN ***************************************/
@@ -89,19 +85,12 @@ int main(int argc, char** argv) {
     
     signal (SIGINT, siginthandler);
     
-    shmid_state = shmget(SHMKEY_state, sizeof(struct state), IPC_CREAT | 0777);
-    if (shmid_state == -1) { //terminate if shmget failed
-            perror("OSS: error in shmget state");
-            exit(1);
-        }
-    liveState = (struct state *) shmat(shmid_state, NULL, 0);
-    if (liveState == (struct state*)(-1) ) {
-        perror("OSS: error in shmat liveState");
-        exit(1);
-    }
-    
     if (setperiodic(runtime) == -1) {
         perror("Failed to setup periodic interrupt");
+        return 1;
+    }
+    if (setinterrupt() == -1) {
+        perror("Failed to set up SIGALRM handler");
         return 1;
     }
     
@@ -124,13 +113,13 @@ int main(int argc, char** argv) {
         printf("OSS: verbose mode OFF\n");
     }
     
+     initIPC();
+    
     // Determine initial available resources
     for (j=0; j<R; j++) {
         (*liveState).resource[j] = rand_r(&seed) % 10 + 1;
         (*liveState).avail[j] = (*liveState).resource[j];
     }
-
-    initIPC();
     
     printAlloc();
     if ( (childpid = fork()) < 0 ){ //terminate code
@@ -145,7 +134,6 @@ int main(int argc, char** argv) {
         perror("OSS: execl() failure"); //report & exit if exec fails
         exit(0);
     }
-
     pid_t waitpid;
     while( (waitpid = wait(&status)) > 0);
     clearIPC();
@@ -252,6 +240,23 @@ void initIPC() {
             exit(1);
         }
     SC_ns = (unsigned int*) shmat(shmid_sim_ns, 0, 0);
+    //shared memory for system state struct
+    shmid_state = shmget(SHMKEY_state, sizeof(struct state), 0777 | IPC_CREAT);
+    if (shmid_state == -1) { //terminate if shmget failed
+            perror("OSS: error in shmget state");
+            exit(1);
+        }
+    liveState = (struct state *) shmat(shmid_state, NULL, 0);
+    if (liveState == (struct state*)(-1) ) {
+        perror("OSS: error in shmat liveState");
+        exit(1);
+    }
+    //message queue
+    if ( (shmid_qid = msgget(SHMKEY_msgq, 0777 | IPC_CREAT)) == -1 ) {
+        perror("OSS: Error generating message queue");
+        exit(0);
+    }
+
 }
 
 void printAvail() {
@@ -262,6 +267,25 @@ void printAvail() {
         printf("%i\t", (*liveState).avail[i]);
     }
     printf("\n");
+}
+
+void incrementClock(unsigned int add_secs, unsigned int add_ns) {
+    sem_wait(sem); //mutex protection
+    unsigned int localsec = *SC_secs;
+    unsigned int localns = *SC_ns;
+    unsigned int temp;
+    localsec = localsec + add_secs;
+    localns = localns + add_ns;
+    //rollover nanoseconds offset if needed
+    if (localns >= BILLION) {
+        localsec++;
+        temp = localns - BILLION;
+        localns = temp;
+    }
+    //update the sim clock in shared memory
+    *SC_secs = localsec;
+    *SC_ns = localns;
+    sem_post(sem);
 }
 
 void printAlloc() {
@@ -281,7 +305,7 @@ void printAlloc() {
 
 void clearIPC() {
     printf("OSS: Clearing IPC resources...\n");
-    //close the semaphore
+    //unlink & close the semaphore
     if (sem_unlink(SNAME) == -1) {
         perror("OSS: Error unlinking semaphore");
     }
@@ -290,10 +314,19 @@ void clearIPC() {
     }
     //close shared memory (sim clock)
     if ( shmctl(shmid_sim_secs, IPC_RMID, NULL) == -1) {
-        perror("error removing shared memory");
+        perror("OSS: error removing shared memory");
     }
     if ( shmctl(shmid_sim_ns, IPC_RMID, NULL) == -1) {
-        perror("error removing shared memory");
+        perror("OSS: error removing shared memory");
+    }
+    //close shared memory system struct
+    if ( shmctl(shmid_state, IPC_RMID, NULL) == -1) {
+        perror("OSS: error removing shared memory");
+    }
+    //close message queue
+    if ( msgctl(shmid_qid, IPC_RMID, NULL) == -1 ) {
+        perror("OSS: Error removing message queue");
+        exit(0);
     }
 }
 
