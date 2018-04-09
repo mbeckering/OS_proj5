@@ -67,22 +67,23 @@ int main(int argc, char** argv) {
     initIPC();
     setMaxClaims(my_pnum, rclaim_bound);
     
-    printf("USER: max bound: %i\n", rclaim_bound);
+    printf("USER%i: max bound: %i\n", my_pnum, rclaim_bound);
     int i;
-    printf("USER:  R0 \tR1 \tR2 \tR3 \tR4 \tR5 \tR6 \tR7 \tR8 \tR9 \tR10"
-    "\tR11\tR12\tR13\tR14\tR15\tR16\tR17\tR18\tR19\nresource:  ");
+    printf("USER%i:  R0 \tR1 \tR2 \tR3 \tR4 \tR5 \tR6 \tR7 \tR8 \tR9 \tR10"
+    "\tR11\tR12\tR13\tR14\tR15\tR16\tR17\tR18\tR19\nresource:  ", my_pnum);
     for(i=0; i<R; i++){
         printf("%i\t", (*liveState).resource[i]);
     }
     printf("\n");
     
-    printf("USER:  R0 \tR1 \tR2 \tR3 \tR4 \tR5 \tR6 \tR7 \tR8 \tR9 \tR10"
-    "\tR11\tR12\tR13\tR14\tR15\tR16\tR17\tR18\tR19\nmax_claim:  ");
+    printf("USER%i:  R0 \tR1 \tR2 \tR3 \tR4 \tR5 \tR6 \tR7 \tR8 \tR9 \tR10"
+    "\tR11\tR12\tR13\tR14\tR15\tR16\tR17\tR18\tR19\nmax_claim:  ", my_pnum);
     for(i=0; i<R; i++){
         printf("%i\t", (*liveState).max_claim[my_pnum][i]);
     }
     printf("\n");
     
+    sleep(3);
     printf("user%i: terminating: normal\n", my_pnum);
     return (EXIT_SUCCESS);
 }
@@ -108,17 +109,17 @@ void incrementClock(unsigned int add_secs, unsigned int add_ns) {
 
 void setMaxClaims(int my_pnum, int max_bound) {
     int r; //resource # iterator
-    max_bound += 1; //actually roll 0-bound instead of 0-(bound-1)
+    //max_bound += 1; //actually roll 0-bound instead of 0-(bound-1)
     for (r=0; r<R; r++) {
         //if total system resource type r is less than max bound,
         //roll my max up to that total instead, to avoid immediate unsafe state
         if ((*liveState).resource[r] < max_bound) {
             (*liveState).max_claim[my_pnum][r] = rand_r(&seed) 
-                    % (*liveState).resource[r];
+                    % (*liveState).resource[r] + 1;
         }
         //otherwise roll from 0 to max bound set by oss, retrived by execl arg
         else {
-            (*liveState).max_claim[my_pnum][r] = rand_r(&seed) % max_bound;
+            (*liveState).max_claim[my_pnum][r] = rand_r(&seed) % max_bound + 1;
         }
     }
 }
@@ -152,7 +153,7 @@ void initIPC() {
         exit(1);
     }
     //message queue
-    if ( (shmid_qid = msgget(SHMKEY_msgq, 0777 | IPC_CREAT)) == -1 ) {
+    if ( (shmid_qid = msgget(SHMKEY_msgq, 0777)) == -1 ) {
         perror("OSS: Error generating message queue");
         exit(0);
     }
