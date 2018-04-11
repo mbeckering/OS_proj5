@@ -6,7 +6,13 @@ Usage: ./oss [-v]
 
 GLOBALS
 I went a bit nuts with globals again, and again, it was to enable me to pass
-more work to functions and cut down on the length of my main functions. And 
+more work to functions and cut down on the length of my mains. And 
 it's been working well on these large programs that already make me feel out 
-of my depth. Keeping track of passing & returning so many values is an extra 
-layer I'll avoid to save time and get my grades.
+of my depth.
+
+MESSAGE QUEUE
+OSS only looks for messages of type 99, and doesn't wait (IPC_NOWAIT). Users 
+only look for messages of type (my_pnum + 100), so pid 0 looks for mtype 100, 
+pid 16 looks for mtype 116, etc. This is because I already built all my arrays 
+and loops as [0-17] before recalling that telling msgrcv to look for mtype 0 
+will cause it to pick up ANY message in the queue.

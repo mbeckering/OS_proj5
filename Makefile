@@ -8,3 +8,4 @@ user: user.c
 	
 clean:
 	rm oss user *.log
+	
