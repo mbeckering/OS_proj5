@@ -90,7 +90,7 @@ int main(int argc, char** argv) {
     my_pnum = atoi(argv[2]);
     int i, roll;
     seed = getpid();
-    ns_between_events = (unsigned int)rand_r(&seed) % 500000000 + 1;
+    ns_between_events = (unsigned int)rand_r(&seed) % 500000 + 1;
     
     initIPC();
     setMaxClaims(my_pnum, rclaim_bound);
@@ -102,7 +102,7 @@ int main(int argc, char** argv) {
         if (isTimeForEvent()) {
             roll = roll1000();
             //rolled to request
-            if (roll > 750) {
+            if (roll > 500) {
                 //decide type & quantity to request
                 setRequest();
                 //send message to request
@@ -116,6 +116,7 @@ int main(int argc, char** argv) {
                         perror("User: error in msgrcv");
                         exit(1);
                     }
+                    printf("User%i: message received, granted=%i\n", my_pnum, msg.user_granted);
                     //if request is granted, roll to terminate
                     if (msg.user_granted == 1) {
                         roll = roll1000();
@@ -125,10 +126,13 @@ int main(int argc, char** argv) {
                         //if request was granted but didn't terminate, keep looping
                         else break;
                     }
+                    else {
+                        printf("User%i: blocked and waiting to be awoken\n", my_pnum);
+                    }
                 }
             }
             //if I roll to release AND I have resources to release
-            else if ( (roll > 700) && haveAnyResources() ) {
+            else if ( haveAnyResources() ) {
                 //decide what resource to release
                 setRelease();
                 //send message to release
@@ -139,9 +143,6 @@ int main(int argc, char** argv) {
             }
             setTimeToNextEvent();
         }
-        
-        
-        //sleep(0.1);
     }
   
     printf("user%i: terminating: normal\n", my_pnum);
@@ -197,7 +198,7 @@ void setRelease() {
     //go through the resource types starting at that location
     for (r=rollin; r<R; r++) {
         //if this user has any of this type allocated
-        if ((*liveState).alloc[my_pnum][r] != 0) {
+        if ((*liveState).alloc[my_pnum][r] > 0) {
             found = 1;
             picktype = r;
         }
@@ -207,7 +208,7 @@ void setRelease() {
     //start from beginning of my allocation row and look from there
     if (found == 0) {
         for (r=0; r<R; r++) {
-            if ((*liveState).alloc[my_pnum][r] != 0) {
+            if ((*liveState).alloc[my_pnum][r] > 0) {
             found = 1;
             picktype = r;
         }
@@ -218,11 +219,12 @@ void setRelease() {
     msg.msgtyp = 99;
     //roll a random amount to release from 1 to current allocation
     msg.r_qty = rand_r(&seed) % (*liveState).alloc[my_pnum][picktype] +1;
-    msg.r_type = 
+    msg.r_type = picktype;
     msg.user_releasing = 1;
     msg.user_requesting = 0;
     msg.user_sim_pid = my_pnum;
     msg.user_terminating = 0;
+    printf("User%i: msg to OSS: releasing %i of rtype %i\n", my_pnum, msg.r_qty, msg.r_type);
 }
 
 int haveAnyResources () {

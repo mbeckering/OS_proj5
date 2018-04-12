@@ -38,6 +38,7 @@ static int setinterrupt(); //periodic interrupt setup
 static void interrupt(int signo, siginfo_t *info, void *context); //handler
 static void siginthandler(int sig_num); //sigint handler
 
+void checkBlocked();
 void allocateResource(int, int, int);
 void terminateUser(int);
 void blockUser(int);
@@ -51,6 +52,8 @@ void setTimeToNextProc(); //schedule next user process spawn
 void incrementClock(unsigned int, unsigned int); //add time to sim clock
 void printAlloc(); //print memory resource allocation table
 void printAvail(); //print the system's available resources
+void printBlocked();
+void printRequests();
 void initIPC(); //initialize IPC stuff. shared mem, semaphores, queues, etc
 void clearIPC(); //clear all that stuff
 int safe(int, int, int); //determine if current system is in a safe state
@@ -114,7 +117,7 @@ int main(int argc, char** argv) {
     int option; //option int for getopt args
     int verbose = 0; //option for verbose mode
     int next_pnum = 0; //next process number to launch
-    double runtime = 8; //runtime limit
+    double runtime = 2; //runtime limit
     pid_t childpid; //child pid
     int i, j, p, r; //iterators
     int status;
@@ -162,25 +165,17 @@ int main(int argc, char** argv) {
         (*liveState).resource[j] = rand_r(&seed) % 10 + 1;
         (*liveState).avail[j] = (*liveState).resource[j];
     }
-     
-    setTimeToNextProc();
-    printf("First user will spawn at %u:%u\n", 
-    spawnNextProcSecs, spawnNextProcNS);
     
+    //set time for first user to spawn
+    setTimeToNextProc();
+    //go ahead and increment sim clock to that time to prevent useless looping
     incrementClock(spawnNextProcSecs, spawnNextProcNS);
     
-    printAlloc();
-    
     while(1) {
-        incrementClock(0, 10000);
+        incrementClock(0, 25000);
         //if it's time, and we're under the user limit, fork a new user
-        if(isTimeToSpawnProc() && numCurrentUsers < P) {
+        if(isTimeToSpawnProc() && numCurrentUsers < P) { 
             next_pnum = getOpenBitVector();
-            printf("OSS: bitVector=");
-            for (i=0; i<P; i++) {
-                printf("%i.", bitVector[i]);
-            }
-            printf("\n");
             if ( (childpid = fork()) < 0 ){ //terminate code
                 perror("OSS: Error forking user");
                 clearIPC();
@@ -215,10 +210,15 @@ int main(int argc, char** argv) {
                 printf("OSS: User %i is terminating\n", msg.user_sim_pid);
                 terminateUser(msg.user_sim_pid);
                 incrementClock(0, 1000);
+                //check blocked queue to see if the freed resources from
+                //the terminating user can be granted to a blocked user
+                checkBlocked();
             }
             //if the user is requesting resources
             else if(msg.user_requesting == 1) {
-                printf("OSS: User %i is requesting\n", msg.user_sim_pid);
+                printf("OSS: User %i is requesting %i of resource %i. currentalloc: %i, max_claim: %i\n", 
+                        msg.user_sim_pid, msg.r_qty, msg.r_type, 
+                        (*liveState).alloc[msg.user_sim_pid][msg.r_type], (*liveState).max_claim[msg.user_sim_pid][msg.r_type]);
                 //if the request is more than this user's max claim
                 if ( (*liveState).alloc[msg.user_sim_pid][msg.r_type] + msg.r_qty >
                         (*liveState).max_claim[msg.user_sim_pid][msg.r_type]) {
@@ -239,9 +239,7 @@ int main(int argc, char** argv) {
                     if (safe(msg.r_type, msg.r_qty, msg.user_sim_pid)) {
                         //if yes, do the allocation
                         allocateResource(msg.r_type, msg.r_qty, msg.user_sim_pid);
-                        
                         incrementClock(0, 25000);
-                        
                     }
                     //if no, send this process to the blocked queue
                     else {
@@ -253,25 +251,13 @@ int main(int argc, char** argv) {
             }
             //if the user is releasing resources
             else if(msg.user_releasing == 1) {
-                printf("OSS: User %i is releasing\n", msg.user_sim_pid);
+                printf("OSS: User %i is releasing %i of resource %i. before release, alloc: %i, max_claim: %i\n", 
+                        msg.user_sim_pid, msg.r_qty, msg.r_type, 
+                        (*liveState).alloc[msg.user_sim_pid][msg.r_type], (*liveState).max_claim[msg.user_sim_pid][msg.r_type]);
                 releaseResource(msg.r_type, msg.r_qty, msg.user_sim_pid);
-                incrementClock(0, 1000);
+                incrementClock(0, 1500);
                 //check blocked queue and see if we can grant a request
-                for(p=0; p<P; p++) {
-                    //if there's a blocked process here
-                    if (blocked[p] != -1) {
-                        //find out what resource is wants
-                        for (r=0; r<R; r++) {
-                            if ( (*liveState).pending_req[p][r] != 0 ) {
-                                //if it's safe to grant it
-                                if ( safe(r, (*liveState).pending_req[p][r], p));
-                                //then unblock that user (also grants the resource)
-                                unblockUser(p);
-                            }
-                        }
-                    }
-                    else break;
-                }
+                checkBlocked();
             }
         }
         
@@ -350,17 +336,50 @@ int safe (int rq_type, int rq_amount, int rq_pid) {
             break;
         }
         else if (found == 0) {
-            printf("OSS: System not in safe state\n");
+            printf("OSS: Allocation would result in UNSAFE STATE\n");
+            incrementClock(0, 35000);
             return 0;
         }
     }
-    printf("OSS: System is in safe state\n");
+    printf("OSS: Allocation results in safe state.\n");
+    incrementClock(0, 35000);
     return 1;
+}
+
+void checkBlocked() {
+    int i, r;
+    for(i=0; i<P; i++) {
+        //if there's a blocked process here
+        if (blocked[i] > -1) {
+            printBlocked();
+            //find out what resource is wants
+            for (r=0; r<R; r++) {
+                if ( (*liveState).pending_req[blocked[i]][r] > 0 ) {
+                    //if it's safe to grant it
+                    printf("OSS: Testing blocked user %i's old request for %i of resource %i\n",
+                        blocked[i], (*liveState).pending_req[blocked[i]][r], r);
+                    if ((*liveState).pending_req[blocked[i]][r] > (*liveState).avail[r]) {
+                        printf("OSS: Denied blocked user %i's old request before calling algorithm (not enough avail)\n", blocked[i]);
+                    }
+                    else if ( safe(r, (*liveState).pending_req[blocked[i]][r], blocked[i])){
+                        //then unblock that user (also grants the resource)
+                        printf("OSS: unblocking and granted user %i's old request for %i of resource %i\n",
+                             blocked[i], (*liveState).pending_req[blocked[i]][r], r);
+                        unblockUser(blocked[i]);
+                        printf("OSS: UNNNNNNNNNNNNNNNNNNNNNNBLOCKED A USER!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n");
+                        printAlloc();
+                    }
+                    break;
+                }
+            }
+        }
+        else break; //once we reach an unoccupied spot in the queue, stop lookin
+    }
+    incrementClock(0, 25000);
 }
 
 void blockUser(int blockpid) {
     int i;
-    printf("OSS: Blocking user %i\n", blockpid);
     //store sim pid to next open spot in blocked queue
     for (i=0; i<P; i++) {
         if (blocked[i] == -1) {
@@ -371,7 +390,7 @@ void blockUser(int blockpid) {
     //save the resource request
     (*liveState).pending_req[blockpid][msg.r_type] = msg.r_qty;
     
-    //send message to user indicating it's blocked until further notice****************************************
+    //send message to user indicating it's blocked until further notice
     msg.msgtyp = blockpid + 100;
     msg.user_denied = 1;
     msg.user_granted = 0;
@@ -380,7 +399,9 @@ void blockUser(int blockpid) {
         killchildren();
         clearIPC();
         exit(0);
-        }
+    }
+    printf("OSS: BLOCKED USER %i, stored request for %i of resource %i\n", blockpid,
+        (*liveState).pending_req[blockpid][msg.r_type], msg.r_type);
 }
 
 int unblockUser(int proc_num) {
@@ -394,12 +415,13 @@ int unblockUser(int proc_num) {
             blocked[17] = -1; //once 17 is moved to 16, clear it by setting -1
             //find the blocked user's request and grant it
             for (i=0; i<R; i++) {
-                if ( (*liveState).pending_req[proc_num][i] != 0 ) {
+                if ( (*liveState).pending_req[proc_num][i] > 0 ) {
                     allocateResource(i, (*liveState).pending_req[proc_num][i], proc_num);
+                    (*liveState).pending_req[proc_num][i] = 0;
+                    break;
                 }
             }
-            
-            
+            printAlloc();
             return 1;
         }
     }
@@ -412,8 +434,6 @@ void allocateResource(int rtype, int ramount, int userpid) {
     (*liveState).alloc[userpid][rtype] += ramount;
     //decrement available resources
     (*liveState).avail[rtype] -= ramount;
-    //set the user's pending request to 0
-    (*liveState).pending_req[userpid][rtype] = 0;
     //send message unblocking user & granting resource
     clearMsg();
     msg.msgtyp = userpid + 100;
@@ -425,12 +445,11 @@ void allocateResource(int rtype, int ramount, int userpid) {
         clearIPC();
         exit(0);
     }
-    printAlloc();
 }
 
 void releaseResource(int rtype, int ramount, int userpid) {
     //remove the resources from the allocation table
-    (*liveState).alloc[userpid][rtype] += ramount;
+    (*liveState).alloc[userpid][rtype] -= ramount;
     //add resources back to available array
     (*liveState).avail[rtype] += ramount;
 }
@@ -467,14 +486,15 @@ void terminateUser(int termpid) {
         (*liveState).avail[i] += (*liveState).alloc[termpid][i];
         //remove allocated resources
         (*liveState).alloc[termpid][i] = 0;
-        //remove max claims of terminating user
+        //remove max claims and any pending requests of terminating user
         (*liveState).max_claim[termpid][i] = 0;
+        (*liveState).pending_req[termpid][i] = 0;
     }
     
     bitVector[termpid] = 0;
     numCurrentUsers--;
     printf("OSS: User %d has terminated. Users alive: %d\n",
-        msg.user_sys_pid, numCurrentUsers);
+        msg.user_sim_pid, numCurrentUsers);
 }
 
 void killchildren() {
@@ -607,12 +627,12 @@ void initIPC() {
 
 void printAvail() {
     int i;
-    printf("AVAIL   R0 \tR1 \tR2 \tR3 \tR4 \tR5 \tR6 \tR7 \tR8 \tR9 \tR10"
-    "\tR11\tR12\tR13\tR14\tR15\tR16\tR17\tR18\tR19\n     :  ");
+    printf("        R0 \tR1 \tR2 \tR3 \tR4 \tR5 \tR6 \tR7 \tR8 \tR9 \tR10"
+    "\tR11\tR12\tR13\tR14\tR15\tR16\tR17\tR18\tR19\nAVAIL:  ");
     for(i=0; i<R; i++){
         printf("%i\t", (*liveState).avail[i]);
     }
-    printf("\nTOTAL: ");
+    printf("\nTOTAL:  ");
     for(i=0; i<R; i++){
         printf("%i\t", (*liveState).resource[i]);
     }
@@ -638,6 +658,20 @@ void incrementClock(unsigned int add_secs, unsigned int add_ns) {
     sem_post(sem);
 }
 
+void printRequests() {
+    int p, r;
+    printf("PENDING RESOURCE REQUESTS:\n");
+    printf("\tR0 \tR1 \tR2 \tR3 \tR4 \tR5 \tR6 \tR7 \tR8 \tR9 \tR10"
+    "\tR11\tR12\tR13\tR14\tR15\tR16\tR17\tR18\tR19\n");
+    for (p=0; p<P; p++) {
+        printf("P%i\t", p);
+        for (r=0; r<R; r++) {
+            printf("%i\t", (*liveState).pending_req[p][r]);
+        }
+        printf("\n");
+    }
+}
+
 void printAlloc() {
     int r, c;
     printf("Current system resource allocation:\n");
@@ -651,6 +685,16 @@ void printAlloc() {
         printf("\n");
     }
     printAvail();
+    printBlocked();
+}
+
+void printBlocked(){
+    int i;
+    printf("Blocked Queue: ");
+    for (i=0; i<P; i++) {
+        printf("%i.", blocked[i]);
+    }
+    printf("\n");
 }
 
 void clearIPC() {
@@ -712,6 +756,7 @@ static int setinterrupt() {
 
 static void interrupt(int signo, siginfo_t *info, void *context) {
     printf("Master: Timer Interrupt Detected! signo = %d\n", signo);
+    printAlloc();
     killchildren();
     clearIPC();
     //close log file

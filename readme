@@ -7,8 +7,8 @@ Usage: ./oss [-v]
 GLOBALS
 I went a bit nuts with globals again, and again, it was to enable me to pass
 more work to functions and cut down on the length of my mains. And 
-it's been working well on these large programs that already make me feel out 
-of my depth.
+it's been working well on these large programs that already make it 
+difficult for me to keep track of where I'm passing/returning variables.
 
 MESSAGE QUEUE
 OSS only looks for messages of type 99, and doesn't wait (IPC_NOWAIT). Users 
@@ -16,3 +16,13 @@ only look for messages of type (my_pnum + 100), so pid 0 looks for mtype 100,
 pid 16 looks for mtype 116, etc. This is because I already built all my arrays 
 and loops as [0-17] before recalling that telling msgrcv to look for mtype 0 
 will cause it to pick up ANY message in the queue.
+
+USERS
+I modeled user behavior to be similar to the banker's algorithm problems we 
+did on paper in class. They can only request one TYPE of resource at a time, 
+but they can request [1-n] QUANTITY of that resource r, where n = (user's max 
+claim of r) - (user's currently allocated instances of r). I considered having 
+users terminate immediately if they reach max_claim of all their resources, 
+like in the paper problems, but it made more sense to me to let them continue 
+to run with all resources. Plus this method increases churn, and liklihood of 
+blocks / denials by OSS.
