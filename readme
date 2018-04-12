@@ -4,6 +4,22 @@ https://github.com/mbeckering/OS_proj5
 Usage: ./oss [-v]
 -v: verbose mode on (extra info in log)
 
+OVERALL BEHAVIOR
+Occasionally the blocked queue can become too full if:
+- A process is particularly greedy (rolls to request often)
+- OSS rolls too many resource types with only 1 or 2 total available.
+
+REPORTING STATS
+Wasn't sure if I should report the total wait time for each process, or 
+total aggregate wait time of all users who spent time in the blocked queue.
+I did the latter, as the former would sometimes spam too much output.
+
+LOGGING
+I never approached 20,000 lines in my log, much less 100,000, even after 
+cranking up the frequency of user events. Lots of the values were left up 
+to us. My program creates churn, and on some runs, every user has a resource, 
+so I concluded that this is sufficient to satisfy the project requirements.
+
 GLOBALS
 I went a bit nuts with globals again, and again, it was to enable me to pass
 more work to functions and cut down on the length of my mains. And 

@@ -30,13 +30,13 @@
 #define BILLION 1000000000
 
 // Function prototypes
-void terminate();
-void setRequest();
-void setRelease();
-int haveAnyResources();
-void setTimeToNextEvent();
-int isTimeForEvent();
-int roll1000();
+void terminate(); //report termination and exit
+void setRequest(); //set request message struct parameters
+void setRelease(); //set release message parameters
+int haveAnyResources(); //returns 0 if I have nothing claimed (don't release)
+void setTimeToNextEvent(); //schedule next event (request/release)
+int isTimeForEvent(); //returns 1 if it's time to do something
+int roll1000(); //returns 1-1000
 void initIPC(); //Initialize IPC resources
 void setMaxClaims(int, int); //decide this user's max claim for each resource
 void incrementClock(unsigned int, unsigned int); //add time to sim clock
@@ -90,7 +90,7 @@ int main(int argc, char** argv) {
     my_pnum = atoi(argv[2]);
     int i, roll;
     seed = getpid();
-    ns_between_events = (unsigned int)rand_r(&seed) % 500000 + 1;
+    ns_between_events = (unsigned int)rand_r(&seed) % 50000 + 1;
     
     initIPC();
     setMaxClaims(my_pnum, rclaim_bound);
@@ -116,18 +116,14 @@ int main(int argc, char** argv) {
                         perror("User: error in msgrcv");
                         exit(1);
                     }
-                    printf("User%i: message received, granted=%i\n", my_pnum, msg.user_granted);
                     //if request is granted, roll to terminate
                     if (msg.user_granted == 1) {
                         roll = roll1000();
-                        if (roll > 950) {
+                        if (roll > 980) {
                             terminate();
                         }
                         //if request was granted but didn't terminate, keep looping
                         else break;
-                    }
-                    else {
-                        printf("User%i: blocked and waiting to be awoken\n", my_pnum);
                     }
                 }
             }
@@ -144,8 +140,6 @@ int main(int argc, char** argv) {
             setTimeToNextEvent();
         }
     }
-  
-    printf("user%i: terminating: normal\n", my_pnum);
     return (EXIT_SUCCESS);
 }
 
@@ -161,7 +155,6 @@ void terminate() {
         perror("User: error sending msg to oss");
         exit(0);
     }
-    printf("User%i rolled to terminate, message sent\n", my_pnum);
     exit(0);
 }
 
@@ -180,6 +173,7 @@ void setRequest() {
             msg.msgtyp = 99;
             //roll a random request amount from 1 to maxrequest
             msg.r_qty = rand_r(&seed) % maxrequest + 1;
+            //msg.r_qty = 1; //experimenting with only 1 instance per request
             msg.r_type = picktype;
             msg.user_releasing = 0;
             msg.user_requesting = 1;
@@ -219,12 +213,12 @@ void setRelease() {
     msg.msgtyp = 99;
     //roll a random amount to release from 1 to current allocation
     msg.r_qty = rand_r(&seed) % (*liveState).alloc[my_pnum][picktype] +1;
+    //msg.r_qty = 1; //experimenting with only 1 instance per release
     msg.r_type = picktype;
     msg.user_releasing = 1;
     msg.user_requesting = 0;
     msg.user_sim_pid = my_pnum;
     msg.user_terminating = 0;
-    printf("User%i: msg to OSS: releasing %i of rtype %i\n", my_pnum, msg.r_qty, msg.r_type);
 }
 
 int haveAnyResources () {
@@ -324,6 +318,5 @@ void initIPC() {
         perror("OSS: Error generating message queue");
         exit(0);
     }
-    
-    
+
 }
