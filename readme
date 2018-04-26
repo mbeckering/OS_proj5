@@ -1,3 +1,7 @@
+Operating System Simulator: Resource Management (Deadlock Avoidance / Banker's Algorithm)
+OSS fork/execs up to 18 concurrent "user" processes that intermittently request resources.
+OSS grants resources if it results in a safe state, else places users in a blocked queue.
+
 Version control:
 https://github.com/mbeckering/OS_proj5
 
